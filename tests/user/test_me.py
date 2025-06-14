@@ -1,12 +1,23 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.api.routes.auth import db_users
 from app.models.user import User
+from app.models.user import UserORM
 from app.services.password import hash_password
+from app.core.config import SessionLocal
 from datetime import datetime, UTC
 
-def test_me_authenticated(setup_user_me, client):
-    """Retorna dados do usuário autenticado no /users/me (200)."""
+def clear_users():
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()
+
+
+def test_me_authenticated(client, setup_user):
+    db = SessionLocal()
+    user = db.query(UserORM).first()
+    assert user is not None
+    db.close()
     login_data = {"email": "user1@example.com", "password": "senhaForte123"}
     login_resp = client.post("/auth/login", json=login_data)
     assert login_resp.status_code == 200
@@ -14,9 +25,9 @@ def test_me_authenticated(setup_user_me, client):
     response = client.get("/users/me")
     assert response.status_code == 200
     body = response.json()
-    assert body["email"] == "user1@example.com"
-    assert body["name"] == "User Teste"
-    assert body["status"] == "active"
+    assert body["data"]["email"] == "user1@example.com"
+    assert body["data"]["name"] == "User Teste"
+    assert body["data"]["status"] == "active"
 
 
 def test_me_unauthenticated(client):
@@ -38,11 +49,10 @@ def test_me_sql_injection(client):
 def test_me_xss_protection():
     """Testa proteção contra XSS no nome do usuário (model User)."""
     import pytest
-    from app.api.routes.auth import db_users
     from app.models.user import User
     from app.services.password import hash_password
     from datetime import datetime, UTC
-    db_users.clear()
+    clear_users()
     with pytest.raises(Exception) as excinfo:
         User(
             id="2",

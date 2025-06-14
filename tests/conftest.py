@@ -1,6 +1,5 @@
 import pytest
-from app.api.routes.auth import db_users
-from app.models.user import User
+from app.models.user import UserORM
 from app.services.password import hash_password
 from tests.factories.user_factory import create_user
 from datetime import datetime, UTC
@@ -8,7 +7,10 @@ from fastapi.testclient import TestClient
 from app.main import app
 from tests.mocks.email_mock import mock_send_email, clear_sent_emails
 import app.api.routes.auth as auth_module
+from app.core.config import SessionLocal
 import logging
+import uuid
+import json
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -21,13 +23,13 @@ def email_mock(monkeypatch):
 
 @pytest.fixture
 def clean_db():
-    """
-    Limpa db_users antes e depois do teste. Use explicitamente em testes que precisam de isolamento total.
-    Não usar com autouse=True para não interferir em testes que dependem de setup_module/setup_users.
-    """
-    db_users.clear()
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
     yield
-    db_users.clear()
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()
 
 @pytest.fixture
 def client():
@@ -35,91 +37,157 @@ def client():
 
 @pytest.fixture
 def setup_user():
-    db_users.clear()
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
     user = create_user()
-    db_users.append(user)
-    yield user
-    db_users.clear()
+    user_orm = UserORM(
+        id=str(uuid.uuid4()),
+        name=user.name,
+        email=user.email,
+        status=user.status,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        roles=json.dumps(user.roles),
+        password_hash=hash_password("senhaForte123")
+    )
+    db.add(user_orm)
+    db.commit()
+    db.refresh(user_orm)
+    db.close()
+    return user_orm
 
 @pytest.fixture
 def setup_user_me():
-    db_users.clear()
-    db_users.append(User(
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
+    user_orm = UserORM(
         id="1",
         name="User Teste",
         email="user1@example.com",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
-        roles=["user"],
+        roles=json.dumps(["user"]),
         password_hash=hash_password("senhaForte123")
-    ))
+    )
+    db.add(user_orm)
+    db.commit()
+    db.refresh(user_orm)
+    db.close()
     yield
-    db_users.clear()
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()
 
 @pytest.fixture
 def setup_user_update_password():
-    db_users.clear()
-    db_users.append(User(
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
+    user_orm = UserORM(
         id="1",
         name="User Teste",
         email="user1@example.com",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
-        roles=["user"],
+        roles=json.dumps(["user"]),
         password_hash=hash_password("senhaForte123")
-    ))
+    )
+    db.add(user_orm)
+    db.commit()
+    db.refresh(user_orm)
+    db.close()
     yield
-    db_users.clear()
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()
 
 @pytest.fixture
 def setup_user_reset_password():
-    db_users.clear()
-    db_users.append(User(
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
+    user_orm = UserORM(
         id="1",
         name="User Teste",
         email="user1@example.com",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
-        roles=["user"],
-        password_hash=hash_password("senhaAntiga123")
-    ))
+        roles=json.dumps(["user"]),
+        password_hash=hash_password("senhaAntiga123"),
+        reset_token="valid-token-123"
+    )
+    db.add(user_orm)
+    db.commit()
+    db.refresh(user_orm)
+    db.close()
     yield
-    db_users.clear()
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()
 
 @pytest.fixture
 def setup_user_logout():
-    db_users.clear()
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
     user = create_user(email="logout@example.com", password="SenhaLogout123", status="active")
-    db_users.append(user)
-    yield user
-    db_users.clear()
+    user_orm = UserORM(
+        id=str(uuid.uuid4()),
+        name=user.name,
+        email=user.email,
+        status=user.status,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        roles=json.dumps(user.roles),
+        password_hash=hash_password("SenhaLogout123")  # Corrigido para bater com o teste
+    )
+    db.add(user_orm)
+    db.commit()
+    db.refresh(user_orm)
+    db.close()
+    yield user_orm
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()
 
 @pytest.fixture
 def setup_users():
-    db_users.clear()
-    user_active = User(
+    db = SessionLocal()
+    db.query(UserORM).delete()
+    db.commit()
+    user_active = UserORM(
         id="1",
         name="Ativo",
         email="ativo@example.com",
         status="active",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
-        roles=["user"],
+        roles=json.dumps(["user"]),
         password_hash=hash_password("senhaAtiva123")
     )
-    user_inactive = User(
+    user_inactive = UserORM(
         id="2",
         name="Inativo",
         email="inativo@example.com",
         status="inactive",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
-        roles=["user"],
+        roles=json.dumps(["user"]),
         password_hash=hash_password("senhaInativa123")
     )
-    db_users.extend([user_active, user_inactive])
+    db.add(user_active)
+    db.add(user_inactive)
+    db.commit()
+    db.refresh(user_active)
+    db.refresh(user_inactive)
+    db.close()
     yield user_active, user_inactive
-    db_users.clear()
+    db.query(UserORM).delete()
+    db.commit()
+    db.close()

@@ -1,6 +1,5 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.api.routes.auth import db_users
 from app.services.password import hash_password
 from app.models.user import User
 from datetime import datetime, UTC
@@ -13,8 +12,8 @@ def test_login_success(client, setup_users):
     assert response.status_code == 200
     assert response.cookies.get("session") is not None
     body = response.json()
-    assert body["email"] == data["email"]
-    assert body["status"] == "active"
+    assert body["data"]["email"] == data["email"]
+    assert body["data"]["status"] == "active"
 
 def test_login_invalid_password(client, setup_users):
     """Retorna 401 para senha incorreta."""
@@ -22,7 +21,7 @@ def test_login_invalid_password(client, setup_users):
     data = {"email": user_active.email, "password": "senhaErrada"}
     response = client.post("/auth/login", json=data)
     assert response.status_code == 401
-    assert response.json()["detail"] == "Senha inválida"
+    assert response.json()["message"] == "Senha inválida"
 
 def test_login_inactive_user(client, setup_users):
     """Retorna 403 para usuário inativo."""
@@ -30,7 +29,7 @@ def test_login_inactive_user(client, setup_users):
     data = {"email": user_inactive.email, "password": "senhaInativa123"}
     response = client.post("/auth/login", json=data)
     assert response.status_code == 403
-    assert response.json()["detail"] == "Usuário inativo"
+    assert response.json()["message"] == "Usuário inativo"
 
 def test_login_invalid_fields(client, setup_users):
     """Valida campos obrigatórios vazios no login (422)."""

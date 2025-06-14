@@ -1,5 +1,4 @@
 import pytest
-from app.api.routes.auth import db_users
 from tests.factories.user_factory import create_user
 from app.services.password import hash_password
 

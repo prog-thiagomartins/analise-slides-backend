@@ -35,6 +35,8 @@ class UserORM(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     roles = Column(String, default="[]")  # Armazena JSON string
     password_hash = Column(String, nullable=False)
+    reset_token = Column(String, nullable=True)  # Adiciona campo opcional para reset de senha
+    reset_token_expires_at = Column(DateTime, nullable=True)  # Expiração do token de reset
 
     def get_roles(self):
         return json.loads(self.roles)

@@ -1,6 +1,5 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.api.routes.auth import db_users
 from app.models.user import User
 from app.services.password import hash_password
 from datetime import datetime, UTC
@@ -15,9 +14,9 @@ def test_update_user_success(setup_user_me, client):
     response = client.put("/users/me", json=data)
     assert response.status_code == 200
     body = response.json()
-    assert body["name"] == "Novo Nome"
-    assert body["email"] == "user1@example.com"
-    assert body["status"] == "active"
+    assert body["data"]["name"] == "Novo Nome"
+    assert body["data"]["email"] == "user1@example.com"
+    assert body["data"]["status"] == "active"
 
 def test_update_user_unauthenticated(client):
     """Retorna 401 ao tentar atualizar usuário sem autenticação."""
@@ -37,7 +36,7 @@ def test_update_user_cannot_change_status(setup_user_me, client):
     assert response.status_code in (200, 422)
     if response.status_code == 200:
         body = response.json()
-        assert body["status"] == "active"
+        assert body["data"]["status"] == "active"
 
 def test_update_user_with_extra_fields(setup_user_me, client):
     """Rejeita campos extras no update do usuário (422) ou ignora se permitido."""

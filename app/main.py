@@ -2,11 +2,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from app.api.router import router as api_router
+import os
+from app.core.config import db_url
+from fastapi.exceptions import RequestValidationError
+from app.utils.validation_handler import validation_exception_handler
+from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="FastAPI Backend")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print(f"[INFO] DATABASE_URL em uso: {db_url}")
+    yield
+
+app = FastAPI(title="finan-api", lifespan=lifespan)
+
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 app.add_middleware(
     CORSMiddleware,

@@ -31,7 +31,7 @@ def test_session_cookie_flags(client):
     response = client.post("/auth/register", json=data)
     cookies = response.headers.get("set-cookie")
     assert cookies is not None
-    assert "HttpOnly" in cookies
+    assert "httponly" in cookies.lower()
     assert any(site in cookies.lower() for site in ["samesite=lax", "samesite=strict"])
     if settings.ENVIRONMENT == "production":
         assert "secure" in cookies.lower()
@@ -49,7 +49,7 @@ def test_session_cookie_flags_login(client):
     response = client.post("/auth/login", json=login_data)
     cookies = response.headers.get("set-cookie")
     assert cookies is not None
-    assert "HttpOnly" in cookies
+    assert "httponly" in cookies.lower()
     assert any(site in cookies.lower() for site in ["samesite=lax", "samesite=strict"])
     if settings.ENVIRONMENT == "production":
         assert "secure" in cookies.lower()

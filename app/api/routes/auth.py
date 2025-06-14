@@ -5,14 +5,18 @@ from app.services.password import hash_password, verify_password
 from app.services.token import create_access_token
 import uuid
 from typing import List
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 from app.core.config import settings
 from fastapi import Body, Cookie, Depends
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 import re
-
-# Simulação de banco em memória para exemplo
-db_users: List[User] = []
+from app.models.user import UserORM
+from app.core.config import SessionLocal
+from sqlalchemy.exc import IntegrityError
+import json
+import secrets
+from app.utils.response import api_response
 
 # Simples armazenamento de tokens de reset para exemplo
 token_user_map = {}
@@ -178,86 +182,161 @@ def validate_reset_token(token: str) -> bool:
 def get_user_by_token(token: str):
     user_id = token_user_map.get(token)
     if user_id:
-        return next((u for u in db_users if u.id == user_id), None)
+        db = SessionLocal()
+        user = db.query(UserORM).filter(UserORM.id == user_id).first()
+        db.close()
+        return user
     return None
 
 # Dependência para obter usuário autenticado
 def get_current_user(session: str = Cookie(None)):
-    # Simples: se o cookie de sessão existe e é válido, retorna o usuário
     if not session or session != "fake-session-token":
-        # Em produção, validar token real
         raise HTTPException(status_code=401, detail="Não autenticado")
-    # Retorna o primeiro usuário ativo (mock)
-    user = next((u for u in db_users if u.status == "active"), None)
+    db = SessionLocal()
+    user = db.query(UserORM).filter(UserORM.status == "active").first()
+    db.close()
     if not user:
         raise HTTPException(status_code=401, detail="Não autenticado")
     return user
 
-@router.post("/auth/register", response_model=RegisterResponse, status_code=201)
+@router.post("/auth/register", status_code=201)
 def register_user(data: RegisterRequest, response: Response):
-    # Verifica se email já existe
-    if any(u.email == data.email for u in db_users):
-        raise HTTPException(status_code=409, detail="Email já cadastrado")
-    now = datetime.now(UTC)
-    # Cria usuário
-    user = User(
-        id=str(len(db_users) + 1),
-        name=data.name,
-        email=data.email,
-        status="active",
-        created_at=now,
-        updated_at=now,
-        roles=["user"],
-        password_hash=hash_password(data.password)
-    )
-    db_users.append(user)
-    # Seta cookie HttpOnly, Secure, SameSite
-    response.set_cookie(
-        key="session",
-        value="fake-session-token",
-        httponly=COOKIE_FLAGS["httponly"],
-        secure=COOKIE_FLAGS["secure"],
-        samesite=COOKIE_FLAGS["samesite"]
-    )
-    return RegisterResponse(
-        id=user.id,
-        name=user.name,
-        email=user.email,
-        status=user.status,
-        created_at=str(user.created_at),
-        updated_at=str(user.updated_at),
-        roles=user.roles
-    )
+    db = SessionLocal()
+    try:
+        user_exists = db.query(UserORM).filter(UserORM.email == data.email).first()
+        if user_exists:
+            db.close()
+            content = api_response(
+                success=False,
+                message="Não foi possível completar a operação.",
+                errors=[{"loc": ["body", "email"], "msg": "E-mail já cadastrado.", "type": "conflict"}],
+                data=None
+            )
+            resp = JSONResponse(status_code=409, content=jsonable_encoder(content))
+            return resp
+        now = datetime.now(UTC)
+        user = UserORM(
+            id=str(uuid.uuid4()),
+            name=data.name,
+            email=data.email,
+            status="active",
+            created_at=now,
+            updated_at=now,
+            roles=json.dumps(["user"]),
+            password_hash=hash_password(data.password)
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        content = api_response(
+            success=True,
+            message="Usuário registrado com sucesso.",
+            errors=[],
+            data={
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "status": user.status,
+                "created_at": str(user.created_at),
+                "updated_at": str(user.updated_at),
+                "roles": json.loads(user.roles)
+            }
+        )
+        resp = JSONResponse(status_code=201, content=jsonable_encoder(content))
+        resp.set_cookie(
+            key="session",
+            value="fake-session-token",
+            httponly=COOKIE_FLAGS["httponly"],
+            secure=COOKIE_FLAGS["secure"],
+            samesite=COOKIE_FLAGS["samesite"]
+        )
+        return resp
+    except IntegrityError:
+        db.rollback()
+        content = api_response(
+            success=False,
+            message="Não foi possível completar a operação.",
+            errors=[{"loc": ["body", "email"], "msg": "E-mail já cadastrado.", "type": "conflict"}],
+            data=None
+        )
+        resp = JSONResponse(status_code=409, content=jsonable_encoder(content))
+        return resp
+    finally:
+        db.close()
 
-@router.post("/auth/login", response_model=LoginResponse)
+@router.post("/auth/login")
 def login_user(data: LoginRequest, response: Response):
-    user = next((u for u in db_users if u.email == data.email), None)
-    if not user:
-        raise HTTPException(status_code=401, detail="Senha inválida")
-    if not verify_password(data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Senha inválida")
-    if user.status != "active":
-        raise HTTPException(status_code=403, detail="Usuário inativo")
-    response.set_cookie(
-        key="session",
-        value="fake-session-token",
-        httponly=COOKIE_FLAGS["httponly"],
-        secure=COOKIE_FLAGS["secure"],
-        samesite=COOKIE_FLAGS["samesite"]
-    )
-    return LoginResponse(
-        id=user.id,
-        name=user.name,
-        email=user.email,
-        status=user.status,
-        created_at=str(user.created_at),
-        updated_at=str(user.updated_at),
-        roles=user.roles
-    )
+    db = SessionLocal()
+    try:
+        user = db.query(UserORM).filter(UserORM.email == data.email).first()
+        if not user:
+            db.close()
+            return JSONResponse(status_code=401, content=api_response(
+                success=False,
+                message="Senha inválida",
+                errors=[{"loc": ["body", "password"], "msg": "Senha inválida", "type": "unauthorized"}],
+                data=None
+            ))
+        if not verify_password(data.password, user.password_hash):
+            db.close()
+            return JSONResponse(status_code=401, content=api_response(
+                success=False,
+                message="Senha inválida",
+                errors=[{"loc": ["body", "password"], "msg": "Senha inválida", "type": "unauthorized"}],
+                data=None
+            ))
+        if user.status != "active":
+            db.close()
+            return JSONResponse(status_code=403, content=api_response(
+                success=False,
+                message="Usuário inativo",
+                errors=[{"loc": ["body", "email"], "msg": "Usuário inativo", "type": "forbidden"}],
+                data=None
+            ))
+        import json
+        roles = user.roles
+        if isinstance(roles, str):
+            try:
+                roles = json.loads(roles)
+            except Exception:
+                roles = []
+        response.set_cookie(
+            key="session",
+            value="fake-session-token",
+            httponly=COOKIE_FLAGS["httponly"],
+            secure=COOKIE_FLAGS["secure"],
+            samesite=COOKIE_FLAGS["samesite"]
+        )
+        content = api_response(
+            success=True,
+            message="Login realizado com sucesso.",
+            errors=[],
+            data={
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "status": user.status,
+                "created_at": str(user.created_at),
+                "updated_at": str(user.updated_at),
+                "roles": roles
+            }
+        )
+        resp = JSONResponse(status_code=200, content=jsonable_encoder(content))
+        resp.set_cookie(
+            key="session",
+            value="fake-session-token",
+            httponly=COOKIE_FLAGS["httponly"],
+            secure=COOKIE_FLAGS["secure"],
+            samesite=COOKIE_FLAGS["samesite"]
+        )
+        return resp
+    finally:
+        db.close()
 
 @router.post("/auth/logout", status_code=204)
 def logout_user(response: Response):
-    response.set_cookie(
+    resp = JSONResponse(status_code=204, content=None)
+    resp.set_cookie(
         key="session",
         value="",
         httponly=COOKIE_FLAGS["httponly"],
@@ -266,79 +345,170 @@ def logout_user(response: Response):
         max_age=0,
         expires=0
     )
-    response.status_code = 204
-    return response
+    return resp
 
 @router.post("/auth/forgot-password", status_code=200)
 def forgot_password(data: ForgotPasswordRequest):
-    user = next((u for u in db_users if u.email == data.email), None)
+    db = SessionLocal()
+    user = db.query(UserORM).filter(UserORM.email == data.email).first()
     if user:
-        token = str(uuid.uuid4())
-        token_user_map[token] = user.id
+        token = secrets.token_urlsafe(32)
+        user.reset_token = token
+        user.reset_token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        db.commit()
         send_email(
             to_email=user.email,
             subject="Reset de senha",
             body=f"Use este token para resetar sua senha: {token}"
         )
+    db.close()
     return {"message": "Se o email existir, um link de reset foi enviado."}
 
 @router.post("/auth/reset-password", status_code=200)
 def reset_password(data: ResetPasswordRequest):
     if not validate_reset_token(data.token):
         raise HTTPException(status_code=400, detail="Token inválido ou expirado")
-    user = get_user_by_token(data.token)
+    db = SessionLocal()
+    user = db.query(UserORM).filter(UserORM.reset_token == data.token).first()
     if not user:
+        db.close()
         raise HTTPException(status_code=400, detail="Token inválido ou expirado")
+    if user.reset_token_expires_at and user.reset_token_expires_at < datetime.utcnow():
+        db.close()
+        raise HTTPException(status_code=400, detail="Token expirado.")
     # Verifica força da nova senha
-    if len(data.new_password) < 8:
+    new_password = data.new_password
+    if len(new_password) < 8:
+        db.close()
         raise HTTPException(status_code=422, detail="A senha deve ter pelo menos 8 caracteres.")
+    if not validate_password_strength(new_password):
+        db.close()
+        raise HTTPException(status_code=422, detail="A senha não atende aos requisitos de segurança.")
     # Atualiza senha
     user.password_hash = hash_password(data.new_password)
-    # Remove token após uso
-    if data.token in token_user_map:
-        del token_user_map[data.token]
+    user.reset_token = None
+    user.reset_token_expires_at = None
+    db.commit()
+    db.close()
     return {"message": "Senha redefinida com sucesso."}
 
-@router.get("/users/me", response_model=LoginResponse)
+@router.get("/users/me")
 def get_me(current_user: User = Depends(get_current_user)):
-    return LoginResponse(
-        id=current_user.id,
-        name=current_user.name,
-        email=current_user.email,
-        status=current_user.status,
-        created_at=str(current_user.created_at),
-        updated_at=str(current_user.updated_at),
-        roles=current_user.roles or []
+    import json
+    roles = current_user.roles
+    if isinstance(roles, str):
+        try:
+            roles = json.loads(roles)
+        except Exception:
+            roles = []
+    return api_response(
+        success=True,
+        message="Usuário autenticado.",
+        errors=[],
+        data={
+            "id": current_user.id,
+            "name": current_user.name,
+            "email": current_user.email,
+            "status": current_user.status,
+            "created_at": str(current_user.created_at),
+            "updated_at": str(current_user.updated_at),
+            "roles": roles or []
+        }
     )
 
-@router.put("/users/me", response_model=LoginResponse)
+@router.put("/users/me")
 def update_me(data: UpdateUserRequest, current_user: User = Depends(get_current_user)):
+    from app.core.config import SessionLocal
+    import json
     sanitized_name = sanitize_input(data.name)
     if '<' in sanitized_name or '>' in sanitized_name:
-        raise HTTPException(status_code=422, detail="Nome inválido.")
-    current_user.name = sanitized_name
-    current_user.updated_at = datetime.now(UTC)
-    return LoginResponse(
-        id=current_user.id,
-        name=current_user.name,
-        email=current_user.email,
-        status=current_user.status,
-        created_at=str(current_user.created_at),
-        updated_at=str(current_user.updated_at),
-        roles=current_user.roles or []
+        return JSONResponse(status_code=422, content=api_response(
+            success=False,
+            message="Nome inválido.",
+            errors=[{"loc": ["body", "name"], "msg": "Nome inválido.", "type": "value_error"}],
+            data=None
+        ))
+    db = SessionLocal()
+    user = db.query(UserORM).filter(UserORM.id == current_user.id).first()
+    user.name = sanitized_name
+    user.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(user)
+    roles = user.roles
+    if isinstance(roles, str):
+        try:
+            roles = json.loads(roles)
+        except Exception:
+            roles = []
+    db.close()
+    return api_response(
+        success=True,
+        message="Usuário atualizado com sucesso.",
+        errors=[],
+        data={
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "status": user.status,
+            "created_at": str(user.created_at),
+            "updated_at": str(user.updated_at),
+            "roles": roles or []
+        }
     )
 
-@router.post("/users/update-password")
+@router.post("/users/update-password", status_code=200)
 def update_password(data: UpdatePasswordRequest, current_user: User = Depends(get_current_user)):
-    # Valida senha atual
-    if not verify_password(data.current_password, current_user.password_hash):
-        raise HTTPException(status_code=401, detail="Senha atual incorreta")
-    # Nova senha deve ser forte e diferente da atual
+    from app.core.config import SessionLocal
+    db = SessionLocal()
+    user = db.query(UserORM).filter(UserORM.id == current_user.id).first()
+    if not verify_password(data.current_password, user.password_hash):
+        db.close()
+        return JSONResponse(status_code=401, content=api_response(
+            success=False,
+            message="Senha atual incorreta",
+            errors=[{"loc": ["body", "current_password"], "msg": "Senha atual incorreta", "type": "unauthorized"}],
+            data=None
+        ))
+    if data.current_password == data.new_password:
+        db.close()
+        return JSONResponse(status_code=422, content=api_response(
+            success=False,
+            message="A nova senha deve ser diferente da senha atual.",
+            errors=[{"loc": ["body", "new_password"], "msg": "A nova senha deve ser diferente da senha atual.", "type": "value_error"}],
+            data=None
+        ))
     if len(data.new_password) < 8:
-        raise HTTPException(status_code=422, detail="A nova senha deve ter pelo menos 8 caracteres.")
-    if verify_password(data.new_password, current_user.password_hash):
-        raise HTTPException(status_code=422, detail="A nova senha deve ser diferente da atual.")
-    # Atualiza senha
-    current_user.password_hash = hash_password(data.new_password)
-    current_user.updated_at = datetime.now(UTC)
-    return {"message": "Senha atualizada com sucesso."}
+        db.close()
+        return JSONResponse(status_code=422, content=api_response(
+            success=False,
+            message="A senha deve ter pelo menos 8 caracteres.",
+            errors=[{"loc": ["body", "new_password"], "msg": "A senha deve ter pelo menos 8 caracteres.", "type": "value_error"}],
+            data=None
+        ))
+    if not validate_password_strength(data.new_password):
+        db.close()
+        return JSONResponse(status_code=422, content=api_response(
+            success=False,
+            message="A senha não atende aos requisitos de segurança.",
+            errors=[{"loc": ["body", "new_password"], "msg": "A senha não atende aos requisitos de segurança.", "type": "value_error"}],
+            data=None
+        ))
+    user.password_hash = hash_password(data.new_password)
+    user.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(user)
+    db.close()
+    return api_response(
+        success=True,
+        message="Senha atualizada com sucesso.",
+        errors=[],
+        data=None
+    )
+
+def validate_password_strength(password: str) -> bool:
+    if not isinstance(password, str):
+        return False
+    if len(password) < 8 or len(password) > 128:
+        return False
+    # Pode adicionar mais regras de força aqui (números, maiúsculas, etc)
+    return True

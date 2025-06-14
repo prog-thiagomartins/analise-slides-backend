@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     DB_NAME: str = "appdb"
     REDIS_URL: str = "redis://localhost:6379/0"
     JWT_SECRET: str = "secret"
+    reset_password_token_enabled: bool = True  # Adicionado para suportar variável de ambiente
 
     if SettingsConfigDict:
         model_config = SettingsConfigDict(env_file=os.getenv("ENV_FILE", ".env.dev"), env_file_encoding="utf-8")

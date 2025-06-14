@@ -7,11 +7,12 @@ def test_register_success(client):
     data = {"name": "User Teste", "email": "user1@example.com", "password": "senhaForte123"}
     response = client.post("/auth/register", json=data)
     assert response.status_code == 201
-    assert client.cookies.get("session") is not None
+    assert response.cookies.get("session") is not None
     body = response.json()
-    assert body["email"] == data["email"]
-    assert body["name"] == data["name"]
-    assert body["status"] == "active"
+    assert body["success"] is True
+    assert body["data"]["email"] == data["email"]
+    assert body["data"]["name"] == data["name"]
+    assert body["data"]["status"] == "active"
 
 
 def test_register_duplicate_email(client):
@@ -20,7 +21,9 @@ def test_register_duplicate_email(client):
     client.post("/auth/register", json=data)
     response = client.post("/auth/register", json=data)
     assert response.status_code == 409
-    assert response.json()["detail"] == "Email já cadastrado"
+    body = response.json()
+    assert body["success"] is False
+    assert body["errors"][0]["msg"] == "E-mail já cadastrado."
 
 
 @pytest.mark.parametrize("data", [
@@ -46,10 +49,9 @@ def test_register_with_extra_fields(client):
 
     if response.status_code == 201:
         body = response.json()
-        assert "hacker" not in body  # Campo extra deve ser ignorado
+        assert "hacker" not in body["data"]  # Campo extra deve ser ignorado
     elif response.status_code == 422:
-        # Compatível com Pydantic 2: type: 'extra_forbidden'
-        detail = response.json()["detail"]
+        detail = response.json()["errors"]
         assert any(
             (err.get("type") == "extra_forbidden" or "extra" in err.get("type", ""))
             for err in (detail if isinstance(detail, list) else [detail])
@@ -79,7 +81,7 @@ def test_register_with_extra_fields(client):
     ({"name": "User Teste", "email": None, "password": "senhaForte123"}, 422),
     ({"name": "User Teste", "email": "usernull@example.com", "password": None}, 422),
 ])
-def test_register_edge_cases(client, data, expected_status):
+def test_register_invalid_payloads(client, data, expected_status):
     """Testa casos limite: strings longas, campos vazios, tipos errados, nulos."""
     response = client.post("/auth/register", json=data)
     assert response.status_code == expected_status
@@ -92,15 +94,15 @@ def test_login_serialization_empty_roles(client):
     resp = client.post("/auth/register", json=data)
     assert resp.status_code == 201
     body = resp.json()
-    assert "roles" in body
-    assert isinstance(body["roles"], list)
+    assert "roles" in body["data"]
+    assert isinstance(body["data"]["roles"], list)
 
     # Login
     login = client.post("/auth/login", json={"email": data["email"], "password": data["password"]})
     assert login.status_code == 200
     login_body = login.json()
-    assert "roles" in login_body
-    assert isinstance(login_body["roles"], list)
+    assert "roles" in login_body["data"]
+    assert isinstance(login_body["data"]["roles"], list)
 
 
 def test_me_serialization_empty_roles(client):
@@ -115,8 +117,8 @@ def test_me_serialization_empty_roles(client):
     me = client.get("/users/me")
     assert me.status_code == 200
     me_body = me.json()
-    assert "roles" in me_body
-    assert isinstance(me_body["roles"], list)
+    assert "roles" in me_body["data"]
+    assert isinstance(me_body["data"]["roles"], list)
 
 
 def test_error_serialization_detail_string(client):
@@ -125,8 +127,7 @@ def test_error_serialization_detail_string(client):
     data = {"name": "Teste", "email": "invalido", "password": "SenhaForte123"}
     resp = client.post("/auth/register", json=data)
     assert resp.status_code == 422
-    detail = resp.json()["detail"]
-    # Pydantic 2 retorna lista de erros, mas garantimos que cada msg é string
+    detail = resp.json()["errors"]
     if isinstance(detail, list):
         for err in detail:
             assert isinstance(err.get("msg", ""), str)

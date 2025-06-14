@@ -1,8 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.api.routes.auth import db_users
 from app.services.password import verify_password
 from datetime import datetime, UTC
+from app.models.user import UserORM
+from app.core.config import SessionLocal
 
 def test_update_password_success(setup_user_update_password, client):
     """Atualiza senha do usuário autenticado com sucesso (200)."""
@@ -13,7 +14,11 @@ def test_update_password_success(setup_user_update_password, client):
     data = {"current_password": "senhaForte123", "new_password": "NovaSenhaForte456"}
     response = client.post("/users/update-password", json=data)
     assert response.status_code == 200
-    assert verify_password("NovaSenhaForte456", db_users[0].password_hash)
+
+    db = SessionLocal()
+    user = db.query(UserORM).filter(UserORM.email == "user1@example.com").first()
+    assert verify_password("NovaSenhaForte456", user.password_hash)
+    db.close()
 
 def test_update_password_same_as_current(setup_user_update_password, client):
     """Retorna 422 se nova senha for igual à atual."""
@@ -24,14 +29,16 @@ def test_update_password_same_as_current(setup_user_update_password, client):
     data = {"current_password": "senhaForte123", "new_password": "senhaForte123"}
     response = client.post("/users/update-password", json=data)
     assert response.status_code == 422
-    assert "diferente" in response.json()["detail"].lower()
+    assert "diferente" in response.json()["errors"][0]["msg"].lower()
 
 def test_update_password_unauthenticated(client):
     """Retorna 401 ao tentar atualizar senha sem autenticação."""
     data = {"current_password": "qualquer", "new_password": "outraSenha123"}
     response = client.post("/users/update-password", json=data)
     assert response.status_code == 401
-    assert "detail" in response.json()
+    # Handler global de erro de autenticação pode retornar detail, mas se padronizar, use errors
+    resp = response.json()
+    assert "errors" in resp or "detail" in resp
 
 def test_update_password_wrong_current(setup_user_update_password, client):
     """Retorna 401 se senha atual estiver incorreta."""
@@ -42,7 +49,7 @@ def test_update_password_wrong_current(setup_user_update_password, client):
     data = {"current_password": "senhaErrada", "new_password": "NovaSenha123"}
     response = client.post("/users/update-password", json=data)
     assert response.status_code == 401
-    assert "senha" in response.json()["detail"].lower()
+    assert "senha" in response.json()["errors"][0]["msg"].lower()
 
 @pytest.mark.parametrize("current_password,new_password,expected_status", [
     ("senhaForte123", "NovaSenha456", 200),
@@ -68,12 +75,11 @@ def test_update_password_weak_new_password(setup_user_update_password, client):
     data = {"current_password": "senhaForte123", "new_password": "123"}
     response = client.post("/users/update-password", json=data)
     assert response.status_code == 422
-    # Compatível com Pydantic 2: detail é lista de erros
-    details = response.json()["detail"]
+    details = response.json()["errors"]
     if isinstance(details, list):
         assert any("senha" in (err.get("msg", "").lower()) for err in details)
     else:
-        assert "senha" in str(details).lower()
+        assert "senha" in details.lower()
 
 @pytest.mark.parametrize("data,expected_status", [
     # Strings absurdamente longas

@@ -9,15 +9,18 @@ def test_forgot_password_flow(client, setup_user):
     data = {"email": setup_user.email}
     response = client.post("/auth/forgot-password", json=data)
     assert response.status_code == 200
+    assert response.json() == {"message": "Se o email existir, um link de reset foi enviado."}
     assert len(sent_emails) == 1
     email = sent_emails[0]
     assert email["to"] == data["email"]
     assert "reset" in email["subject"].lower() or "senha" in email["subject"].lower()
     assert "token" in email["body"]
 
+
 def test_forgot_password_invalid_email(client):
     """Não envia email se o email não existe na base."""
     data = {"email": "naoexiste@example.com"}
     response = client.post("/auth/forgot-password", json=data)
     assert response.status_code == 200
+    assert response.json() == {"message": "Se o email existir, um link de reset foi enviado."}
     assert sent_emails == []
