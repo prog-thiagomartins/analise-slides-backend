@@ -1,0 +1,35 @@
+version: "3.8"
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: hkuser
+      POSTGRES_PASSWORD: hkpass
+      POSTGRES_DB: hkdb
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata_hk:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6382:6379"
+
+  backend:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8003:8000"
+    env_file:
+      - .env.hk
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  pgdata_hk:

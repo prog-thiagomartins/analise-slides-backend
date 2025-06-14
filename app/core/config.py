@@ -8,6 +8,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
+from app.models.user import Base  # importa Base do modelo User
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "MyApp"
@@ -37,3 +38,7 @@ else:
 
 engine = create_engine(db_url, connect_args={"check_same_thread": False} if db_url.startswith("sqlite") else {})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Criação automática das tabelas no ambiente de desenvolvimento
+if settings.ENVIRONMENT == "development":
+    Base.metadata.create_all(bind=engine)
